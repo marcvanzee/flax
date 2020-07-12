@@ -23,6 +23,9 @@ from absl import app
 from absl import flags
 from absl import logging
 
+import functools
+
+from flax import jax_utils
 from flax import nn
 from flax import optim
 from flax.metrics import tensorboard
@@ -87,6 +90,7 @@ def create_model(key):
 def create_optimizer(model, learning_rate, beta):
   optimizer_def = optim.Momentum(learning_rate=learning_rate, beta=beta)
   optimizer = optimizer_def.create(model)
+  optimizer = jax_utils.replicate(optimizer)
   return optimizer
 
 
@@ -99,6 +103,11 @@ def cross_entropy_loss(logits, labels):
   return -jnp.mean(jnp.sum(onehot(labels) * logits, axis=-1))
 
 
+def shard(xs):
+  return jax.tree_map(
+      lambda x: x.reshape((jax.device_count(), -1) + x.shape[1:]), xs)
+
+
 def compute_metrics(logits, labels):
   loss = cross_entropy_loss(logits, labels)
   accuracy = jnp.mean(jnp.argmax(logits, -1) == labels)
@@ -109,7 +118,7 @@ def compute_metrics(logits, labels):
   return metrics
 
 
-@jax.jit
+@functools.partial(jax.pmap, axis_name='batch')
 def train_step(optimizer, batch):
   """Train for a single step."""
   def loss_fn(model):
@@ -118,8 +127,10 @@ def train_step(optimizer, batch):
     return loss, logits
   grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
   (_, logits), grad = grad_fn(optimizer.target)
+  grad = jax.lax.pmean(grad, axis_name='batch')
   optimizer = optimizer.apply_gradient(grad)
   metrics = compute_metrics(logits, batch['label'])
+  metrics = jax.lax.pmean(metrics, axis_name='batch')
   return optimizer, metrics
 
 
@@ -131,6 +142,9 @@ def eval_step(model, batch):
 
 def train_epoch(optimizer, train_ds, batch_size, epoch, rng):
   """Train for a single epoch."""
+  if batch_size % jax.device_count() > 0:
+    raise ValueError('Batch size must be divisible by the number of devices')
+
   train_ds_size = len(train_ds['image'])
   steps_per_epoch = train_ds_size // batch_size
 
@@ -140,6 +154,7 @@ def train_epoch(optimizer, train_ds, batch_size, epoch, rng):
   batch_metrics = []
   for perm in perms:
     batch = {k: v[perm] for k, v in train_ds.items()}
+    batch = shard(batch)
     optimizer, metrics = train_step(optimizer, batch)
     batch_metrics.append(metrics)
 
@@ -191,7 +206,8 @@ def train(train_ds, test_ds):
     rng, input_rng = random.split(rng)
     optimizer, train_metrics = train_epoch(
         optimizer, train_ds, batch_size, epoch, input_rng)
-    loss, accuracy = eval_model(optimizer.target, test_ds)
+    model = jax_utils.unreplicate(optimizer.target)  # Fetch from 1st device
+    loss, accuracy = eval_model(model, test_ds)
     logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
                  epoch, loss, accuracy * 100)
     summary_writer.scalar('train_loss', train_metrics['loss'], epoch)
