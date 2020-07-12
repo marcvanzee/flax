@@ -34,8 +34,9 @@ class TrainTest(absltest.TestCase):
     optimizer = train.create_optimizer(model, 0.1, 0.9)
 
     # test single train step.
-    optimizer, train_metrics = train.train_step(
+    optimizer, params_ema, train_metrics = train.train_step(
         optimizer=optimizer,
+        params_ema=model.params,
         batch={k: v[:batch_size] for k, v in train_ds.items()})
     self.assertLessEqual(train_metrics['loss'], 2.302)
     self.assertGreaterEqual(train_metrics['accuracy'], 0.0625)

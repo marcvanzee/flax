@@ -110,7 +110,7 @@ def compute_metrics(logits, labels):
 
 
 @jax.jit
-def train_step(optimizer, batch):
+def train_step(optimizer, params_ema, batch):
   """Train for a single step."""
   def loss_fn(model):
     logits = model(batch['image'])
@@ -119,8 +119,12 @@ def train_step(optimizer, batch):
   grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
   (_, logits), grad = grad_fn(optimizer.target)
   optimizer = optimizer.apply_gradient(grad)
+  params_ema = jax.tree_multimap(
+      lambda p_ema, p: p_ema * 0.99 + p * 0.01,
+      params_ema, optimizer.target.params)
   metrics = compute_metrics(logits, batch['label'])
-  return optimizer, metrics
+  metrics = compute_metrics(logits, batch['label'])
+  return optimizer, params_ema, metrics
 
 
 @jax.jit
@@ -129,7 +133,7 @@ def eval_step(model, batch):
   return compute_metrics(logits, batch['label'])
 
 
-def train_epoch(optimizer, train_ds, batch_size, epoch, rng):
+def train_epoch(optimizer, params_ema, train_ds, batch_size, epoch, rng):
   """Train for a single epoch."""
   train_ds_size = len(train_ds['image'])
   steps_per_epoch = train_ds_size // batch_size
@@ -140,7 +144,7 @@ def train_epoch(optimizer, train_ds, batch_size, epoch, rng):
   batch_metrics = []
   for perm in perms:
     batch = {k: v[perm] for k, v in train_ds.items()}
-    optimizer, metrics = train_step(optimizer, batch)
+    optimizer, params_ema, metrics = train_step(optimizer, batch)
     batch_metrics.append(metrics)
 
   # compute mean of metrics across each batch in epoch.
@@ -186,14 +190,19 @@ def train(train_ds, test_ds):
   rng, init_rng = random.split(rng)
   model = create_model(init_rng)
   optimizer = create_optimizer(model, FLAGS.learning_rate, FLAGS.momentum)
+  params_ema = model.params
 
   for epoch in range(1, num_epochs + 1):
     rng, input_rng = random.split(rng)
     optimizer, train_metrics = train_epoch(
-        optimizer, train_ds, batch_size, epoch, input_rng)
+        optimizer, params_ema, train_ds, batch_size, epoch, input_rng)
     loss, accuracy = eval_model(optimizer.target, test_ds)
     logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
                  epoch, loss, accuracy * 100)
+    model_ema = optimizer.target.replace(params=params_ema)
+    polyak_loss, polyak_accuracy = eval_model(model_ema, test_ds)
+    logging.info('polyak eval epoch: %d, loss: %.4f, accuracy: %.2f',
+                 epoch, polyak_loss, polyak_accuracy * 100)
     summary_writer.scalar('train_loss', train_metrics['loss'], epoch)
     summary_writer.scalar('train_accuracy', train_metrics['accuracy'], epoch)
     summary_writer.scalar('eval_loss', loss, epoch)
