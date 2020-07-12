@@ -102,7 +102,7 @@ class TrainTest(absltest.TestCase):
       model = train.create_model()
       optimizer = train.create_optimizer(model, 0.003)
       optimizer, train_metrics = train.train_step(
-          optimizer, batch, nn.make_rng())
+          optimizer, batch, 0.5, nn.make_rng())
 
     self.assertLessEqual(train_metrics['loss'], 5)
     self.assertGreaterEqual(train_metrics['accuracy'], 0)
