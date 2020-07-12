@@ -21,6 +21,8 @@ import train
 import jax
 from jax import random
 
+from flax import jax_utils
+
 # Parse absl flags test_srcdir and test_tmpdir.
 jax.config.parse_flags_with_absl()
 
@@ -30,20 +32,23 @@ class TrainTest(absltest.TestCase):
   def test_single_train_step(self):
     train_ds, test_ds = train.get_datasets()
     batch_size = 32
-    model = train.create_model(random.PRNGKey(0))
+    model = train.create_model(random.split(random.PRNGKey(0),
+                                            jax.device_count()))
+    test_ds = jax_utils.replicate(test_ds)
     optimizer = train.create_optimizer(model, 0.1, 0.9)
 
     # test single train step.
+    batch = jax_utils.replicate({k: v[:batch_size] for k, v in train_ds.items()})
     optimizer, train_metrics = train.train_step(
         optimizer=optimizer,
-        batch={k: v[:batch_size] for k, v in train_ds.items()})
-    self.assertLessEqual(train_metrics['loss'], 2.302)
-    self.assertGreaterEqual(train_metrics['accuracy'], 0.0625)
+        batch=batch)
+    self.assertLessEqual(train_metrics['loss'], 2.34)
+    self.assertGreaterEqual(train_metrics['accuracy'], 0.03125)
 
     # Run eval model.
     loss, accuracy = train.eval_model(optimizer.target, test_ds)
-    self.assertLess(loss, 2.252)
-    self.assertGreater(accuracy, 0.2597)
+    self.assertLessEqual(train_metrics['loss'], 2.34)
+    self.assertGreaterEqual(train_metrics['accuracy'], 0.03125)
 
 if __name__ == '__main__':
   absltest.main()

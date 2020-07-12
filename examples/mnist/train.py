@@ -23,6 +23,9 @@ from absl import app
 from absl import flags
 from absl import logging
 
+import functools
+
+from flax import jax_utils
 from flax import nn
 from flax import optim
 from flax.metrics import tensorboard
@@ -78,12 +81,14 @@ class CNN(nn.Module):
     return x
 
 
+@jax.pmap
 def create_model(key):
   _, initial_params = CNN.init_by_shape(key, [((1, 28, 28, 1), jnp.float32)])
   model = nn.Model(CNN, initial_params)
   return model
 
 
+@functools.partial(jax.pmap, static_broadcasted_argnums=(1, 2))
 def create_optimizer(model, learning_rate, beta):
   optimizer_def = optim.Momentum(learning_rate=learning_rate, beta=beta)
   optimizer = optimizer_def.create(model)
@@ -109,7 +114,7 @@ def compute_metrics(logits, labels):
   return metrics
 
 
-@jax.jit
+@jax.pmap
 def train_step(optimizer, batch):
   """Train for a single step."""
   def loss_fn(model):
@@ -123,7 +128,7 @@ def train_step(optimizer, batch):
   return optimizer, metrics
 
 
-@jax.jit
+@jax.pmap
 def eval_step(model, batch):
   logits = model(batch['image'])
   return compute_metrics(logits, batch['label'])
@@ -140,16 +145,23 @@ def train_epoch(optimizer, train_ds, batch_size, epoch, rng):
   batch_metrics = []
   for perm in perms:
     batch = {k: v[perm] for k, v in train_ds.items()}
+    batch = jax_utils.replicate(batch)
     optimizer, metrics = train_step(optimizer, batch)
     batch_metrics.append(metrics)
 
   # compute mean of metrics across each batch in epoch.
   batch_metrics_np = jax.device_get(batch_metrics)
+  # stack all of the metrics from each devioce into
+  # numpy arrays directly on a dict, such that, e.g.
+  # `batch_metrics_np['loss']` has shape (jax.device_count(), )
+  batch_metrics_np = jax.tree_multimap(lambda *xs: onp.array(xs),
+                                       *batch_metrics_np)
   epoch_metrics_np = {
-      k: onp.mean([metrics[k] for metrics in batch_metrics_np])
-      for k in batch_metrics_np[0]}
-
-  logging.info('train epoch: %d, loss: %.4f, accuracy: %.2f', epoch,
+      k: onp.mean(batch_metrics_np[k], axis=0)
+      for k in batch_metrics_np
+  }
+  # `epoch_metrics_np` now contains 1D arrays of length `jax.device_count()`
+  logging.info('train epoch: %d, loss: %s, accuracy: %s', epoch,
                epoch_metrics_np['loss'], epoch_metrics_np['accuracy'] * 100)
 
   return optimizer, epoch_metrics_np
@@ -158,7 +170,7 @@ def train_epoch(optimizer, train_ds, batch_size, epoch, rng):
 def eval_model(model, test_ds):
   metrics = eval_step(model, test_ds)
   metrics = jax.device_get(metrics)
-  summary = jax.tree_map(lambda x: x.item(), metrics)
+  summary = metrics
   return summary['loss'], summary['accuracy']
 
 
@@ -183,16 +195,19 @@ def train(train_ds, test_ds):
 
   summary_writer = tensorboard.SummaryWriter(model_dir)
 
-  rng, init_rng = random.split(rng)
+  rng, init_rng = random.split(rng, jax.device_count())
   model = create_model(init_rng)
   optimizer = create_optimizer(model, FLAGS.learning_rate, FLAGS.momentum)
+
+  test_ds = jax_utils.replicate(test_ds)
 
   for epoch in range(1, num_epochs + 1):
     rng, input_rng = random.split(rng)
     optimizer, train_metrics = train_epoch(
         optimizer, train_ds, batch_size, epoch, input_rng)
     loss, accuracy = eval_model(optimizer.target, test_ds)
-    logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
+    # `loss` and `accuracy` are now 1D arrays of length `jax.device_count()`
+    logging.info('eval epoch: %d, loss: %s, accuracy: %s',
                  epoch, loss, accuracy * 100)
     summary_writer.scalar('train_loss', train_metrics['loss'], epoch)
     summary_writer.scalar('train_accuracy', train_metrics['accuracy'], epoch)
