@@ -15,9 +15,11 @@ Array = Any
 
 def mlp_scan(scope: Scope, xs: Array,
              share_params: bool = False):
+  print('In mlp_scan')
   
   scope.variable('counter', 'i', jnp.zeros, ())
   def body_fn(scope, c, x):
+    print('In body_fn')
     counter = scope.variable('counter', 'i', jnp.zeros, ())
     counter.value += 1
     x = scope.child(nn.dense)(x, 1)

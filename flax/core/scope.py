@@ -4,7 +4,6 @@
 TODO(jheek): DO NOT SUBMIT without a detailed description of scope.
 """
 
-import enum
 import functools
 import hashlib
 from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Tuple, TypeVar, Union, Generic
@@ -24,12 +23,13 @@ T = TypeVar('T')
 PRNGKey = Any
 Array = Any
 
+Kind = str
 
-KindFilter = Union[bool, str, Sequence[str]]
+KindFilter = Union[bool, Kind, Sequence[Kind]]
 
-MaybeFrozenKind = Union[Dict[str, Any], FrozenDict[str, Any]]
+MaybeFrozenKind = Union[Dict[Kind, Any], FrozenDict[Kind, Any]]
 
-Variables = Dict[str, MaybeFrozenKind]
+Variables = Dict[Kind, MaybeFrozenKind]
 
 
 def _fold_in_str(rng: PRNGKey, data: str) -> PRNGKey:
@@ -249,7 +249,7 @@ class Scope:
     for kind in kinds:
       self.get_kind(kind)
 
-def _unfreeze_variables(variables, mutable):
+def _unfreeze_variables(variables: Variables, mutable: KindFilter) -> Variables:
   new_variables = {}
   for key, value in variables.items():
     if in_kind_filter(mutable, key):
@@ -260,21 +260,39 @@ def _unfreeze_variables(variables, mutable):
 
 
 def apply(fn: Callable[..., Any],
-          mutable: KindFilter = False) -> Callable[..., Any]:
-  """Functionalize a module."""
+          mutable: KindFilter = False) -> Union[Callable[..., Any]]:
+  print('Called apply, mutable: ', mutable)
+  """Functionalizes a module.
+  
+  Jax transformations are purely functonal: they do not support mutable
+  variables. In order to allow mutability (for instance, for batchnorm), we use
+  a wrapper function in which variables are mutable, and we return the (possibly
+  modified) mutable variables after applying the function with the mutable
+  variables."""
   @functools.wraps(fn)
   def wrapper(variables, *args, rngs=None, **kwargs):
+    # Create a clone of `variables`, making those mutable that are in the kind
+    # filter `mutable`.
     new_variables = _unfreeze_variables(variables, mutable)
+    # This temporary scope object is there mainly to avoid users making
+    # mistakes. It ensures that the root scope is invalid.
     with Scope(new_variables, rngs=rngs).temporary() as root:
       y = fn(root, *args, **kwargs)
     if mutable:
+      print('Mutable!')
       return y, freeze(new_variables)
     else:
+      print('Not mutable')
       return y
   return wrapper
 
 
-def init(fn: Callable[..., Any], mutable: bool = True) -> Callable[..., Any]:
+def init(fn: Callable[..., Any], mutable: KindFilter = True) -> Callable[..., Any]:
+  print('Called init')
+  """Initialize a module.
+
+  This function is the same as `apply`, but it wraps another function that
+  properly initializes the random generators."""
   @functools.wraps(fn)
   def wrapper(rngs, *args, **kwargs):
     if not isinstance(rngs, dict):

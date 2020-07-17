@@ -1,7 +1,6 @@
 from absl.testing import absltest
 
-from flax.core import scope
-from flax.core.scope import Scope, init
+from flax.core.scope import Scope, init, in_kind_filter, group_kinds
 
 from jax import random
 
@@ -10,15 +9,15 @@ import functools
 class ScopeTest(absltest.TestCase):
 
   def test_in_find_filter(self):    
-    self.assertTrue(scope.in_kind_filter(True, "test"))
-    self.assertFalse(scope.in_kind_filter("123", "1234"))
-    self.assertTrue(scope.in_kind_filter("123", "123"))
+    self.assertTrue(in_kind_filter(True, "test"))
+    self.assertFalse(in_kind_filter("123", "1234"))
+    self.assertTrue(in_kind_filter("123", "123"))
 
-    self.assertFalse(scope.in_kind_filter(["1", "2"], "3"))
-    self.assertFalse(scope.in_kind_filter([], ""))
+    self.assertFalse(in_kind_filter(["1", "2"], "3"))
+    self.assertFalse(in_kind_filter([], ""))
     
     # This should be disallowed if we run pytyping, but passes here.
-    self.assertTrue(scope.in_kind_filter([1, 5, 2], 2))
+    self.assertTrue(in_kind_filter([1, 5, 2], 2))
   
   def test_group_kinds(self):
     xs = {
@@ -27,23 +26,23 @@ class ScopeTest(absltest.TestCase):
         "3": { "33": 3 },
     }
     # Both variables are selected by the first kind filter.
-    filter = [True, "1", "2", ["3", "4"]]
+    kind_filter = [True, "1", "2", ["3", "4"]]
     expected = (xs, {}, {}, {})
-    self.assertEqual(scope.group_kinds(xs, filter), expected)
+    self.assertEqual(group_kinds(xs, kind_filter), expected)
 
     # Filter 1, 2, 3 select resp. variable 1, 2, 3.
-    filter = filter[1:]
+    kind_filter = kind_filter[1:]
     expected = ({"1": xs["1"]}, {"2": xs["2"]}, {"3": xs["3"]})
-    self.assertEqual(scope.group_kinds(xs, filter), expected)
+    self.assertEqual(group_kinds(xs, kind_filter), expected)
 
     # Filter 1 selects variable 1 and 2. Variable 3 is ignored.
-    filter = [["1", "2"], ["4"]]
+    kind_filter = [["1", "2"], ["4"]]
     expected = ({"1": xs["1"], "2": xs["2"]}, {})
-    self.assertEqual(scope.group_kinds(xs, filter), expected)
+    self.assertEqual(group_kinds(xs, kind_filter), expected)
 
-    filter = ["3", "1"]
+    kind_filter = ["3", "1"]
     expected = ({"3": xs["3"]}, {"1": xs["1"]})
-    self.assertEqual(scope.group_kinds(xs, filter), expected)
+    self.assertEqual(group_kinds(xs, kind_filter), expected)
 
   def test_temporary_context(self):
     with Scope(variables=None).temporary() as s:
@@ -54,7 +53,7 @@ class ScopeTest(absltest.TestCase):
     # Basic use of init.
     def simple_fn(scope: Scope):
       return scope
-    
+
     # If no mutable variables are selected, only the scope object is returned.
     print('key', random.PRNGKey(42))
     s = init(simple_fn, mutable=False)(random.PRNGKey(1))
@@ -71,7 +70,7 @@ class ScopeTest(absltest.TestCase):
 
     s = test_fn(random.PRNGKey(1))
     self.assertTrue(isinstance(s, Scope))
-    
+
   def test_apply(self):
     pass
 
