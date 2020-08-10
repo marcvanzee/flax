@@ -14,15 +14,10 @@
 
 """Linen Neural Network api."""
 
-
 # pylint: disable=g-multiple-import
 # re-export commonly used modules and functions
-<<<<<<< HEAD
-from .module import Module, MultiModule
-=======
 from .module import Module, compact
->>>>>>> 2aed9a1fa9eb15a2ef3f79b6b4c7bd5d5e00604c
-from .transforms import vmap, scan, remat, jit
+from .transforms import vmap, scan, remat, jit, named_call
 from .activation import (celu, elu, gelu, glu, leaky_relu, log_sigmoid,
                          log_softmax, relu, sigmoid, soft_sign, softmax,
                          softplus, swish, tanh)
