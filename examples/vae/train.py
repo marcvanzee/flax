@@ -81,8 +81,6 @@ class VAE(nn.Module):
   latents: int = 20
 
   def setup(self):
-    # self.encoder = Encoder(self.latents, name='encoder')
-    # self.decoder = Decoder(name='decoder')
     self.encoder = Encoder(self.latents)
     self.decoder = Decoder()
 
