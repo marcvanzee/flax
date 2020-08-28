@@ -22,44 +22,46 @@ from absl import logging
 
 import jax
 from jax import random
-
 import jax.numpy as jnp
+from jax.config import config
+config.enable_omnistaging()
 
 import numpy as onp
 
 import tensorflow_datasets as tfds
 
-from flax import nn
+from flax import linen as nn
 from flax import optim
 from flax.metrics import tensorboard
 
 class CNN(nn.Module):
   """A simple CNN model."""
 
-  def apply(self, x):
-    x = nn.Conv(x, features=32, kernel_size=(3, 3))
+  @nn.compact
+  def __call__(self, x):
+    x = nn.Conv(features=32, kernel_size=(3, 3))(x)
     x = nn.relu(x)
     x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
-    x = nn.Conv(x, features=64, kernel_size=(3, 3))
+    x = nn.Conv(features=64, kernel_size=(3, 3))(x)
     x = nn.relu(x)
     x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
     x = x.reshape((x.shape[0], -1))  # flatten
-    x = nn.Dense(x, features=256)
+    x = nn.Dense(features=256)(x)
     x = nn.relu(x)
-    x = nn.Dense(x, features=10)
+    x = nn.Dense(features=10)(x)
     x = nn.log_softmax(x)
     return x
 
 
-def create_model(key):
-  _, initial_params = CNN.init_by_shape(key, [((1, 28, 28, 1), jnp.float32)])
-  model = nn.Model(CNN, initial_params)
-  return model
+def get_params(key):
+  init_shape = jnp.ones((1, 28, 28, 1), jnp.float32)
+  initial_params = CNN().init(key, init_shape)["param"]
+  return initial_params
 
 
-def create_optimizer(model, learning_rate, beta):
+def create_optimizer(params, learning_rate, beta):
   optimizer_def = optim.Momentum(learning_rate=learning_rate, beta=beta)
-  optimizer = optimizer_def.create(model)
+  optimizer = optimizer_def.create(params)
   return optimizer
 
 
@@ -86,7 +88,7 @@ def compute_metrics(logits, labels):
 def train_step(optimizer, batch):
   """Train for a single step."""
   def loss_fn(model):
-    logits = model(batch['image'])
+    logits = CNN().apply(batch['image'])
     loss = cross_entropy_loss(logits, batch['label'])
     return loss, logits
   grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
@@ -98,7 +100,7 @@ def train_step(optimizer, batch):
 
 @jax.jit
 def eval_step(model, batch):
-  logits = model(batch['image'])
+  logits = CNN().apply(batch['image'])
   return compute_metrics(logits, batch['label'])
 
 
@@ -163,8 +165,8 @@ def train_and_evaluate(model_dir: str, num_epochs: int, batch_size: int,
   summary_writer = tensorboard.SummaryWriter(model_dir)
 
   rng, init_rng = random.split(rng)
-  model = create_model(init_rng)
-  optimizer = create_optimizer(model, learning_rate, momentum)
+  params = get_params(init_rng)
+  optimizer = create_optimizer(params, learning_rate, momentum)
 
   for epoch in range(1, num_epochs + 1):
     rng, input_rng = random.split(rng)
