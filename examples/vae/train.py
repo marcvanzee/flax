@@ -20,8 +20,10 @@ import jax.numpy as jnp
 
 import jax
 from jax import random
+from jax.config import config
+config.enable_omnistaging()
 
-from flax import nn
+from flax import linen as nn
 from flax import optim
 
 import tensorflow as tf
@@ -57,18 +59,18 @@ class Encoder(nn.Module):
   latents: int
 
   @nn.compact
-  def apply(self, x):
-    x = nn.Dense(x, 500, name='fc1')
+  def __call__(self, x):
+    x = nn.Dense(500, name='fc1')(x)
     x = nn.relu(x)
-    mean_x = nn.Dense(x, self.latents, name='fc2_mean')
-    logvar_x = nn.Dense(x, self.latents, name='fc2_logvar')
+    mean_x = nn.Dense(self.latents, name='fc2_mean')(x)
+    logvar_x = nn.Dense(self.latents, name='fc2_logvar')(x)
     return mean_x, logvar_x
 
 
 class Decoder(nn.Module):
-  
+
   @nn.compact
-  def apply(self, z):
+  def __call__(self, z):
     z = nn.Dense(500, name='fc1')(z)
     z = nn.relu(z)
     z = nn.Dense(784, name='fc2')(z)
@@ -79,16 +81,18 @@ class VAE(nn.Module):
   latents: int = 20
 
   def setup(self):
-    self.encoder = Encoder(self.latents, name='encoder')
-    self.decoder = Decoder(name='decoder')
+    # self.encoder = Encoder(self.latents, name='encoder')
+    # self.decoder = Decoder(name='decoder')
+    self.encoder = Encoder(self.latents)
+    self.decoder = Decoder()
 
-  def apply(self, x, z_rng):
+  def __call__(self, x, z_rng):
     mean, logvar = self.encoder(x)
     z = reparameterize(z_rng, mean, logvar)
     recon_x = self.decoder(z)
     return recon_x, mean, logvar
 
-  def generate(self, z, **unused_kwargs):
+  def generate(self, z):
     return nn.sigmoid(self.decoder(z))
 
 
@@ -138,14 +142,14 @@ def train_step(optimizer, batch, z_rng):
   return optimizer
 
 
-@jax.jit
+# @jax.jit
 def eval(params, images, z, z_rng):
   recon_images, mean, logvar = model().apply({'param': params}, images, z_rng)
 
   comparison = jnp.concatenate([images[:8].reshape(-1, 28, 28, 1),
                                 recon_images[:8].reshape(-1, 28, 28, 1)])
 
-  generate_images = model().generate({'param': params}, z)
+  generate_images = model().apply({'param': params}, z, method=VAE.generate)
   generate_images = generate_images.reshape(-1, 28, 28, 1)
   metrics = compute_metrics(recon_images, images, mean, logvar)
 
@@ -179,7 +183,7 @@ def main(argv):
   test_ds = jax.device_put(test_ds)
 
   init_data = jnp.ones((FLAGS.batch_size, 784), jnp.float32)
-  params = model().init(key, init_data)['param']
+  params = model().init(key, init_data, rng)['param']
 
   optimizer = optim.Adam(learning_rate=FLAGS.learning_rate).create(params)
   optimizer = jax.device_put(optimizer)
