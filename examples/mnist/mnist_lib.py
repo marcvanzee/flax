@@ -87,8 +87,8 @@ def compute_metrics(logits, labels):
 @jax.jit
 def train_step(optimizer, batch):
   """Train for a single step."""
-  def loss_fn(model):
-    logits = CNN().apply(batch['image'])
+  def loss_fn(params):
+    logits = CNN().apply({'param': params}, batch['image'])
     loss = cross_entropy_loss(logits, batch['label'])
     return loss, logits
   grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
@@ -99,8 +99,8 @@ def train_step(optimizer, batch):
 
 
 @jax.jit
-def eval_step(model, batch):
-  logits = CNN().apply(batch['image'])
+def eval_step(params, batch):
+  logits = CNN().apply({'param': params}, batch['image'])
   return compute_metrics(logits, batch['label'])
 
 
