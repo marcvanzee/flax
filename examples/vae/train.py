@@ -54,40 +54,42 @@ flags.DEFINE_integer(
 
 
 class Encoder(nn.Module):
+  latents: int
 
-  def apply(self, x, latents):
+  @nn.compact
+  def apply(self, x):
     x = nn.Dense(x, 500, name='fc1')
     x = nn.relu(x)
-    mean_x = nn.Dense(x, latents, name='fc2_mean')
-    logvar_x = nn.Dense(x, latents, name='fc2_logvar')
+    mean_x = nn.Dense(x, self.latents, name='fc2_mean')
+    logvar_x = nn.Dense(x, self.latents, name='fc2_logvar')
     return mean_x, logvar_x
 
 
 class Decoder(nn.Module):
-
+  
+  @nn.compact
   def apply(self, z):
-    z = nn.Dense(z, 500, name='fc1')
+    z = nn.Dense(500, name='fc1')(z)
     z = nn.relu(z)
-    z = nn.Dense(z, 784, name='fc2')
+    z = nn.Dense(784, name='fc2')(z)
     return z
 
 
 class VAE(nn.Module):
+  latents: int = 20
 
-  def apply(self, x, z_rng, latents=20):
-    decoder = self._create_decoder()
-    mean, logvar = Encoder(x, latents, name='encoder')
+  def setup(self):
+    self.encoder = Encoder(self.latents, name='encoder')
+    self.decoder = Decoder(name='decoder')
+
+  def apply(self, x, z_rng):
+    mean, logvar = self.encoder(x)
     z = reparameterize(z_rng, mean, logvar)
-    recon_x = decoder(z)
+    recon_x = self.decoder(z)
     return recon_x, mean, logvar
 
-  @nn.module_method
   def generate(self, z, **unused_kwargs):
-    decoder = self._create_decoder()
-    return nn.sigmoid(decoder(z))
-
-  def _create_decoder(self):
-    return Decoder.shared(name='decoder')
+    return nn.sigmoid(self.decoder(z))
 
 
 def reparameterize(rng, mean, logvar):
@@ -117,10 +119,14 @@ def compute_metrics(recon_x, x, mean, logvar):
   }
 
 
+def model():
+  return VAE(latents=FLAGS.latents)
+
+
 @jax.jit
 def train_step(optimizer, batch, z_rng):
-  def loss_fn(model):
-    recon_x, mean, logvar = model(batch, z_rng)
+  def loss_fn(params):
+    recon_x, mean, logvar = model().apply({'param': params}, batch, z_rng)
 
     bce_loss = binary_cross_entropy_with_logits(recon_x, batch).mean()
     kld_loss = kl_divergence(mean, logvar).mean()
@@ -133,13 +139,13 @@ def train_step(optimizer, batch, z_rng):
 
 
 @jax.jit
-def eval(model, images, z, z_rng):
-  recon_images, mean, logvar = model(images, z_rng)
+def eval(params, images, z, z_rng):
+  recon_images, mean, logvar = model().apply({'param': params}, images, z_rng)
 
   comparison = jnp.concatenate([images[:8].reshape(-1, 28, 28, 1),
                                 recon_images[:8].reshape(-1, 28, 28, 1)])
 
-  generate_images = model.generate(z)
+  generate_images = model().generate({'param': params}, z)
   generate_images = generate_images.reshape(-1, 28, 28, 1)
   metrics = compute_metrics(recon_images, images, mean, logvar)
 
@@ -172,12 +178,10 @@ def main(argv):
   test_ds = np.array(list(test_ds)[0])
   test_ds = jax.device_put(test_ds)
 
-  module = VAE.partial(latents=FLAGS.latents)
-  _, params = module.init_by_shape(
-      key, [(FLAGS.batch_size, 784)], z_rng=random.PRNGKey(0))
-  vae = nn.Model(module, params)
+  init_data = jnp.ones((FLAGS.batch_size, 784), jnp.float32)
+  params = model().init(key, init_data)['param']
 
-  optimizer = optim.Adam(learning_rate=FLAGS.learning_rate).create(vae)
+  optimizer = optim.Adam(learning_rate=FLAGS.learning_rate).create(params)
   optimizer = jax.device_put(optimizer)
 
   rng, z_key, eval_rng = random.split(rng, 3)
