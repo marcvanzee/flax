@@ -223,10 +223,10 @@ class Decoder(nn.Module):
 class Seq2seq(nn.Module):
   """Sequence-to-sequence class using encoder/decoder architecture."""
 
-  def _create_modules(self, eos_id, hidden_size):	
-    encoder = Encoder.partial(	
-        eos_id=eos_id, hidden_size=hidden_size).shared(name='encoder')	
-    decoder = Decoder.shared(name='decoder')	
+  def _create_modules(self, eos_id, hidden_size):
+    encoder = Encoder.partial(
+        eos_id=eos_id, hidden_size=hidden_size).shared(name='encoder')
+    decoder = Decoder.shared(name='decoder')
 
   def apply(self,
             encoder_inputs,
@@ -258,11 +258,11 @@ class Seq2seq(nn.Module):
     encoder, decoder = self._create_modules(eos_id, hidden_size)
 
     # Encode inputs
-    init_decoder_state = encoder(encoder_inputs)	
-    # Decode outputs.	
-    logits, predictions = decoder(	
-        init_decoder_state,	
-        decoder_inputs[:, :-1],	
+    init_decoder_state = encoder(encoder_inputs)
+    # Decode outputs.
+    logits, predictions = decoder(
+        init_decoder_state,
+        decoder_inputs[:, :-1],
         teacher_force=teacher_force)
 
     return logits, predictions
